@@ -1,0 +1,199 @@
+#!/usr/bin/perl
+
+# PACKAGES AND OPTIONS
+
+use warnings;
+use strict;
+use File::Copy;
+use Getopt::Std;
+
+# Stupid Unicode crap.
+use Unicode::Normalize;
+use feature 'unicode_strings';
+
+# run 'sudo perl -MCPAN -e "install LaTeX::Encode"' to use this package
+use LaTeX::Encode;
+my %encode_options = ( 'except' => '\\{}&' );  # Zotero auto-escapes some things
+
+# Add additional author suffixes here as appropriate
+my @suffixes = ('jr');
+
+# PROGRAM STARTS HERE
+
+# Parse command-line arguments
+my %args;
+getopts('FX', \%args);
+
+my $first_name_only = $args{'F'};			# If this is set, drop middle names/initials
+my $append_str = $args{'X'} ? '>' : '>>';	# Append to the current file, or overwrite?
+
+$ARGV[0] or die(usage());
+$ARGV[1] or die(usage());
+
+copy($ARGV[1], "$ARGV[1].bak");				# Back up the old version in case something goes wrong
+
+# Make sure we handle unicode strings on input/output
+open INPUT, "<:utf8", $ARGV[0];
+open OUTPUT, "$append_str:utf8", $ARGV[1];
+
+my ($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year) = 
+	('', '', '', '', '', '', '', '', '');
+my @otherlines = ();
+my %all_keys;
+my $entry_num = 0;
+
+# Loop through all entries in the input file
+while (<INPUT>)
+{
+	# Match the keyword line
+	if (/@([a-z]+)\{.*,$/)
+		{ $entry_type = $1; }
+
+	# Handle months (Zotero doesn't print {} around the months)
+	elsif (/\s+month = (\w+),/)
+		{ $month = ucfirst($1); }
+	
+	# Grab the year for the keyword
+	elsif (/\s+year = {(\d+)},?/)
+	{
+		$key2 = substr($1, 2, 2);
+		$year = $1;
+	}
+
+	# Grab the title of the paper
+	elsif (/\s+title = \{(.*)\},/)
+	{
+		$title = latex_encode($1, %encode_options);
+	}
+
+	# Reformat authors and editors to the correct style
+	elsif (/\s+(author|editor) = \{(.*)\},/)
+	{
+		my $label = $1;		# Author or editor?
+		my @names = split ' and ', $2;		# Get a list of individual names for further parsing
+		my $namestring;
+		foreach my $name (@names)
+		{
+			$name =~ s/(\{|\})//g;	# Remove curly braces in the name
+
+			# Convert unicode quotes to regular quotes for names like D'Ambrosio (stupid unicode)
+			my $unicode_quote = chr(0x2019);
+			$name =~ s/$unicode_quote/'/g;
+
+			# Group by "last name" and "everything else"
+			if ($name =~ /^(\w+[\s\w'-]*), (.*)/)
+			{
+				# Figure out the "name" part of the citation key: strip out diacriticals and
+				# non-word-characters
+				if ($key1 eq '' and $label eq 'author')
+				{
+					$key1 = NFKD($1);
+					$key1 =~ s/(\s+|\p{NonspacingMark}|')//g;
+				}
+				my $lastname = latex_encode($1, %encode_options);
+
+				# Split out each of the other names.  We'll assume they're all first or middle
+				# names, and convert them all to initials
+				my @othernames = split(/ /, $2);
+
+				# If the last name has a suffix (like 'Jr.'), it should be the first element in
+				# the @othernames array, so we want to check for this and save it to the end of the
+				# last name
+				foreach (@suffixes)
+				{
+					if ($othernames[0] =~ /($_)\.?,?/i)
+					{
+						$lastname .= ', ' . ucfirst($1) . '.';
+						shift @othernames;
+						last;
+					}
+				}
+
+				my $firstname;
+
+				# Remove middle names from the array if the option was specified
+				if ($first_name_only) { splice @othernames, 1; }
+
+				# Format all non-last-names as $initial.'.~' (the tilde is a non-breaking space to
+				# be used after an author initial)
+				foreach (@othernames)
+					{ if (/\w+/) { $firstname .= uc(substr($_, 0, 1)) . '.~'; } }
+
+				# New string -- initial(s) plus last name
+				$namestring .= "$firstname$lastname and ";
+			}
+		}
+
+		# Remove the last ' and ', and print out the authors
+		$namestring = substr($namestring, 0, -5);
+
+		if ($label eq 'author')
+			{ $authors_formatted = "$label = {$namestring}"; }
+		elsif($label eq 'editor')
+			{ $editors_formatted = "$label = {$namestring}"; }
+
+	}
+
+	# Get rid of lines we don't care about
+	elsif (/(urldate|file|issn|shorttitle|doi|abstract|keywords|language|copyright|isbn|note|type)/)
+		{ next; }
+
+	# Entry is finished, dump output and reset
+	elsif (/^},?/)
+	{
+		# Compute the entry key as first author's last name + last two digits of year
+		if ($key2 eq '')
+			{ print "\nWARNING: no year specified for entry $entry_num:\n\t$title\n\n"; }
+		my $key = $key1.$key2;
+
+		# If the key has already been used, we need to append a distinguishing character; keys with
+		# the same name/year are Name99, Name99b, Name99c, etc.
+		if (defined $all_keys{$key})
+			{ $key .= $all_keys{$key}; $all_keys{$key}++; }
+		else { $all_keys{$key} = 'b'; }
+		
+		# Print the output for this entry
+		print OUTPUT '@'.$entry_type."{$key,\n";
+		print OUTPUT "\ttitle = {$title},\n";
+		print OUTPUT "\t$authors_formatted,\n";
+		if ($editors_formatted ne '') { print OUTPUT "\t$editors_formatted,\n"; }
+		print OUTPUT "\tmonth = {$month},\n";
+		print OUTPUT "\tyear = {$year},\n";
+		foreach (@otherlines)
+			{ print OUTPUT; }
+		print OUTPUT "},\n\n";
+
+		# Reset everything for the next entry
+		($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year) =
+			('', '', '', '', '', '', '', '', '');
+		@otherlines = ();
+		$entry_num++;
+	}
+
+	# Print everything else as it was, but handle unicode stuff
+	elsif (/\s*(.*) = {(.*)}/) 
+	{ 
+		my $line_type = $1;
+		my %local_encode_options = %encode_options;
+
+		# If your LaTeX doesn't \usepackage{url}, you'll need to escape the '_' in urls
+		if ($line_type eq 'url')
+		{
+			if (not $entry_type eq 'misc') { next; }
+			else { $local_encode_options{'except'} .= '_'; }
+		}
+		my $line_value = latex_encode($2, %local_encode_options);
+		push @otherlines, "\t$line_type = {$line_value},\n";
+	}
+}
+
+sub usage
+{
+	return "Usage: parsebib [-F] <Zotero file> <output file>\n" .
+		   "\t -F: use first initials only (discard middle initials)\n" .
+		   "\t -X: overwrite bibliography file instead of appending\n";
+}
+
+
+
+
