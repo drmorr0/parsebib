@@ -5,6 +5,8 @@
 use warnings;
 use strict;
 use File::Copy;
+use File::Basename;
+use Cwd;
 use Getopt::Std;
 
 # Stupid Unicode crap.
@@ -15,17 +17,23 @@ use feature 'unicode_strings';
 use LaTeX::Encode;
 my %encode_options = ( 'except' => '\\{}&' );  # Zotero auto-escapes some things
 
-# Add additional author suffixes here as appropriate
-my @suffixes = ('jr');
+our @suffixes;
+our %journal_substitutions;
+my $script_dir = Cwd::abs_path(dirname(__FILE__));
+require($script_dir . '/substitutions');
 
 # PROGRAM STARTS HERE
 
 # Parse command-line arguments
 my %args;
-getopts('FX', \%args);
+getopts('FJXS:', \%args);
 
 my $first_name_only = $args{'F'};			# If this is set, drop middle names/initials
+my $use_short_journal = $args{'J'};			# Use the short journal names in the 'subs' file
+my $subs_file = $args{'S'};					# Additional substitutions
 my $append_str = $args{'X'} ? '>' : '>>';	# Append to the current file, or overwrite?
+
+if (defined $subs_file) { require($subs_file); }
 
 $ARGV[0] or die(usage());
 $ARGV[1] or die(usage());
@@ -36,8 +44,9 @@ copy($ARGV[1], "$ARGV[1].bak");				# Back up the old version in case something g
 open INPUT, "<:utf8", $ARGV[0];
 open OUTPUT, "$append_str:utf8", $ARGV[1];
 
-my ($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year) = 
-	('', '', '', '', '', '', '', '', '');
+my ($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year,
+	$journal_formatted) = 
+	('', '', '', '', '', '', '', '', '', '');
 my @otherlines = ();
 my %all_keys;
 my $entry_num = 0;
@@ -64,6 +73,33 @@ while (<INPUT>)
 	elsif (/\s+title = \{(.*)\},/)
 	{
 		$title = latex_encode($1, %encode_options);
+	}
+
+	# Format the journal title appropriately
+	elsif (/\s+(journal|booktitle) = \{(.*)\},/)
+	{
+		my $journal = $2;
+
+		# Replace words in the journal title with abbreviations
+		if ($use_short_journal)
+		{
+			my @journal_words = split /\s+/, $journal;
+			$journal = '';
+			foreach (@journal_words)
+			{
+				# Check if the word is in our list of substitutions; otherwise just print it
+				# There may be some issues if you have an already-abbreviated or
+				# unusually-capitalized word in the list of substitutions
+				my $lcword = lc;
+				if (defined $journal_substitutions{$lcword})
+					{ $journal .= ucfirst($journal_substitutions{$lcword}).". "; }
+				else
+					{ $journal .= $_." "; }
+			}
+		}
+		# Remove trailing space
+		$journal = substr($journal, 0, -1);
+		$journal_formatted = "$1 = {$journal}";
 	}
 
 	# Reformat authors and editors to the correct style
@@ -157,6 +193,7 @@ while (<INPUT>)
 		print OUTPUT "\ttitle = {$title},\n";
 		print OUTPUT "\t$authors_formatted,\n";
 		if ($editors_formatted ne '') { print OUTPUT "\t$editors_formatted,\n"; }
+		if ($journal_formatted ne '') { print OUTPUT "\t$journal_formatted,\n"; }
 		print OUTPUT "\tmonth = {$month},\n";
 		print OUTPUT "\tyear = {$year},\n";
 		foreach (@otherlines)
@@ -164,8 +201,9 @@ while (<INPUT>)
 		print OUTPUT "},\n\n";
 
 		# Reset everything for the next entry
-		($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year) =
-			('', '', '', '', '', '', '', '', '');
+		($entry_type, $key1, $key2, $title, $authors_formatted, $editors_formatted, $month, $year,
+			$journal_formatted) =
+			('', '', '', '', '', '', '', '', '', '');
 		@otherlines = ();
 		$entry_num++;
 	}
@@ -189,9 +227,11 @@ while (<INPUT>)
 
 sub usage
 {
-	return "Usage: parsebib [-F] <Zotero file> <output file>\n" .
-		   "\t -F: use first initials only (discard middle initials)\n" .
-		   "\t -X: overwrite bibliography file instead of appending\n";
+	return "Usage: parsebib [-FJX] [-S file] <Zotero file> <output file>\n" .
+		   "\t-F: use first initials only (discard middle initials)\n" .
+		   "\t-J: use short journal names in subs file\n" .
+		   "\t-S: Additional substitutions file\n" .
+		   "\t-X: overwrite bibliography file instead of appending\n";
 }
 
 
