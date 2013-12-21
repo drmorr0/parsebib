@@ -96,9 +96,9 @@ while (<INPUT>)
 				else
 					{ $journal .= $_." "; }
 			}
+			# Remove trailing space
+			$journal = substr($journal, 0, -1);
 		}
-		# Remove trailing space
-		$journal = substr($journal, 0, -1);
 		$journal_formatted = "$1 = {$journal}";
 	}
 
@@ -194,7 +194,7 @@ while (<INPUT>)
 		print OUTPUT "\t$authors_formatted,\n";
 		if ($editors_formatted ne '') { print OUTPUT "\t$editors_formatted,\n"; }
 		if ($journal_formatted ne '') { print OUTPUT "\t$journal_formatted,\n"; }
-		print OUTPUT "\tmonth = {$month},\n";
+		if ($month ne '') { print OUTPUT "\tmonth = {$month},\n"; }
 		print OUTPUT "\tyear = {$year},\n";
 		foreach (@otherlines)
 			{ print OUTPUT; }
