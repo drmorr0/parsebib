@@ -141,6 +141,7 @@ while (<INPUT>)
 					{
 						$lastname .= ', ' . ucfirst($1) . '.';
 						shift @othernames;
+						$lastname = "{$lastname}";
 						last;
 					}
 				}
