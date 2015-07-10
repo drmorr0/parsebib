@@ -63,7 +63,7 @@ while (<INPUT>)
 		{ $month = ucfirst($1); }
 	
 	# Grab the year for the keyword
-	elsif (/\s+year = {(\d+)},?/)
+	elsif (/\s+year = \{(\d+)\},?/)
 	{
 		$key2 = substr($1, 2, 2);
 		$year = $1;
@@ -72,13 +72,17 @@ while (<INPUT>)
 	# Grab the title of the paper
 	elsif (/\s+title = \{(.*)\},/)
 	{
-		$title = latex_encode($1, %encode_options);
+		$title = $1;
+		$title =~ s/(\{|\})//g;	# Remove curly braces in the name
+		$title = latex_encode($title, %encode_options);
 	}
 
 	# Format the journal title appropriately
 	elsif (/\s+(journal|booktitle) = \{(.*)\},/)
 	{
+		my $tag = $1;
 		my $journal = $2;
+		$journal =~ s/(\{|\})//g;
 
 		# Replace words in the journal title with abbreviations
 		if ($use_short_journal)
@@ -99,7 +103,7 @@ while (<INPUT>)
 			# Remove trailing space
 			$journal = substr($journal, 0, -1);
 		}
-		$journal_formatted = "$1 = {$journal}";
+		$journal_formatted = "$tag = {$journal}";
 	}
 
 	# Reformat authors and editors to the correct style
@@ -210,7 +214,7 @@ while (<INPUT>)
 	}
 
 	# Print everything else as it was, but handle unicode stuff
-	elsif (/\s*(.*) = {(.*)}/) 
+	elsif (/\s*(.*) = \{(.*)\}/) 
 	{ 
 		my $line_type = $1;
 		my %local_encode_options = %encode_options;

@@ -23,6 +23,7 @@
 'communication' => 'comm',
 'communications' => 'comm',
 'computer' => 'comput',
+'computers' => 'comput',
 'computation' => 'comput',
 'computing' => 'comput',
 'conference' => 'conf',
